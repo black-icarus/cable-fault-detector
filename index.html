@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BioFault | Deteksi Kabel Organik</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bio-light: #e8f5e9;
+            --bio-primary: #4caf50;
+            --bio-dark: #2e7d32;
+            --bio-leaf: #81c784;
+            --bio-alert: #e53935;
+            --text-main: #1b5e20;
+        }
+        body {
+            font-family: 'Quicksand', sans-serif;
+            background-color: var(--bio-light);
+            background-image: radial-gradient(circle at 10% 20%, rgba(129, 199, 132, 0.2) 0%, transparent 20%),
+                              radial-gradient(circle at 90% 80%, rgba(76, 175, 80, 0.2) 0%, transparent 20%);
+            color: var(--text-main);
+            margin: 0; padding: 20px;
+            display: flex; flex-direction: column; align-items: center;
+        }
+        h1 {
+            color: var(--bio-dark);
+            text-align: center;
+            font-weight: 700;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            width: 100%;
+            max-width: 1000px;
+            margin-bottom: 20px;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 25px; /* Bentuk organik */
+            box-shadow: 0 10px 20px rgba(46, 125, 50, 0.1);
+            text-align: center;
+            transition: transform 0.3s ease;
+            border: 2px solid transparent;
+        }
+        .card:hover { transform: translateY(-5px); }
+        .card h3 { margin-top: 0; color: var(--bio-leaf); font-size: 1.2rem; }
+        .value { font-size: 2.5rem; font-weight: 700; color: var(--bio-dark); }
+        
+        /* Status Indicator */
+        .status-aman { border-color: var(--bio-primary); background-color: #f1f8e9; }
+        .status-korslet { border-color: var(--bio-alert); background-color: #ffebee; color: var(--bio-alert);}
+        
+        .chart-container {
+            width: 100%;
+            max-width: 1000px;
+            background: white;
+            padding: 20px;
+            border-radius: 25px;
+            box-shadow: 0 10px 20px rgba(46, 125, 50, 0.1);
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🌿 BioFault Dashboard</h1>
+
+    <div class="dashboard">
+        <div class="card" id="card-status">
+            <h3>Status Sistem</h3>
+            <div class="value" id="val-status">Menunggu...</div>
+            <div id="val-jarak" style="font-size: 1.2rem; margin-top: 10px;">Jarak: -</div>
+        </div>
+        <div class="card">
+            <h3>Sinyal Jembatan (V-Diff)</h3>
+            <div class="value"><span id="val-sinyal">0.00</span> mV</div>
+        </div>
+        <div class="card">
+            <h3>Daya Sistem</h3>
+            <div style="font-size: 1.5rem; color: var(--bio-dark); font-weight: 600;">
+                <span id="val-vbus">0.00</span> V <br>
+                <span id="val-arus">0.00</span> mA
+            </div>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="sinyalChart"></canvas>
+    </div>
+
+    <script>
+        // 1. Setup Chart.js
+        const ctx = document.getElementById('sinyalChart').getContext('2d');
+        const sinyalChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Waktu
+                datasets: [{
+                    label: 'Sinyal Tegangan (mV)',
+                    data: [],
+                    borderColor: '#4caf50',
+                    backgroundColor: 'rgba(76, 175, 80, 0.2)',
+                    borderWidth: 3,
+                    pointRadius: 0, // Organik tanpa titik tajam
+                    tension: 0.4, // Kurva melengkung (organik)
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                animation: false,
+                scales: {
+                    x: { display: false }, // Sembunyikan label waktu biar rapi
+                    y: { suggestedMin: -5, suggestedMax: 15 }
+                }
+            }
+        });
+
+        // 2. Setup Koneksi MQTT (HiveMQ WebSockets)
+        // Vercel pakai HTTPS, jadi kita wajib pakai WSS (Secure WebSocket) port 8884
+        const mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+        const topic = "telematika/esp32/cablefault";
+
+        mqttClient.on('connect', () => {
+            console.log("Terhubung ke Alam (HiveMQ) 🌿");
+            mqttClient.subscribe(topic);
+            document.getElementById('val-status').innerText = "ONLINE";
+        });
+
+        mqttClient.on('message', (topic, message) => {
+            // Parse data JSON dari ESP32
+            const data = JSON.parse(message.toString());
+            
+            // Update Text UI
+            document.getElementById('val-sinyal').innerText = data.sinyal;
+            document.getElementById('val-vbus').innerText = data.vbus;
+            document.getElementById('val-arus').innerText = data.arus;
+            
+            const statusCard = document.getElementById('card-status');
+            const valStatus = document.getElementById('val-status');
+            const valJarak = document.getElementById('val-jarak');
+
+            if (data.status === "KORSLET") {
+                statusCard.className = "card status-korslet";
+                valStatus.innerText = "🚨 KORSLET";
+                valJarak.innerText = `Lokasi: ${data.jarak} Meter`;
+            } else {
+                statusCard.className = "card status-aman";
+                valStatus.innerText = "🌱 AMAN";
+                valJarak.innerText = "Lokasi: -";
+            }
+
+            // Update Grafik (Batasi maksimal 30 titik data biar gak berat)
+            const timeNow = new Date().toLocaleTimeString();
+            sinyalChart.data.labels.push(timeNow);
+            sinyalChart.data.datasets[0].data.push(data.sinyal);
+
+            if (sinyalChart.data.labels.length > 30) {
+                sinyalChart.data.labels.shift();
+                sinyalChart.data.datasets[0].data.shift();
+            }
+            sinyalChart.update();
+        });
+    </script>
+</body>
+</html>
